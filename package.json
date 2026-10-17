@@ -1,0 +1,25 @@
+{
+  "name": "interviewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "iNTERVIEWER: real-time AI video interviewer with evidence-based recruiter reports",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run typecheck && npm run build --workspace apps/api",
+    "start": "npm run start --workspace apps/api",
+    "dev": "npm run dev --workspace apps/api",
+    "test": "npm run test --workspace apps/api",
+    "typecheck": "npm run typecheck --workspace apps/api",
+    "db:check": "npm run db:check --workspace apps/api",
+    "create-pal": "npm run create-pal --workspace apps/api",
+    "secrets": "npm run secrets --workspace apps/api",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
