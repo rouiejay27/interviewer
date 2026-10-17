@@ -15,6 +15,7 @@
     "typecheck": "npm run typecheck --workspace apps/api",
     "db:check": "npm run db:check --workspace apps/api",
     "create-pal": "npm run create-pal --workspace apps/api",
+    "create-recruiter": "npm run create-recruiter --workspace apps/api --",
     "secrets": "npm run secrets --workspace apps/api",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down"

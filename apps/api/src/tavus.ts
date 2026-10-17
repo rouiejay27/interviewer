@@ -74,6 +74,8 @@ export async function createPal(auth: TavusAuth, input: CreatePalInput): Promise
 export interface CreateConversationInput {
   palId: string;
   sessionId: string;
+  /** Shown in the provider dashboard. Never include applicant names. */
+  conversationName?: string;
   callbackUrl: string;
   greeting: string;
   maxCallSeconds: number;
@@ -93,7 +95,7 @@ export async function createConversation(
 ): Promise<CreateConversationResult> {
   return tavusFetch(auth, "/v2/conversations", {
     pal_id: input.palId,
-    conversation_name: `iNTERVIEWER PoC ${input.sessionId.slice(0, 8)}`,
+    conversation_name: input.conversationName ?? `iNTERVIEWER PoC ${input.sessionId.slice(0, 8)}`,
     // Lets our custom LLM endpoint map each request to the right session.
     conversational_context: `INTERVIEWER_SESSION_ID=${input.sessionId}`,
     custom_greeting: input.greeting,

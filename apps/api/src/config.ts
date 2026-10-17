@@ -25,12 +25,20 @@ const EnvSchema = z.object({
   XAI_API_KEY: z.string().min(1),
   XAI_BASE_URL: z.url().default("https://api.x.ai/v1"),
   XAI_LIVE_MODEL: z.string().default("grok-4.20-0309-non-reasoning"),
+  // Used after the call (rubric drafts, evaluation), so quality matters more than speed.
+  XAI_EVAL_MODEL: z.string().default("grok-4.7"),
 
   LLM_PROXY_SECRET: z.string().min(24, "LLM_PROXY_SECRET must be at least 24 characters"),
   WEBHOOK_SECRET: z.string().min(24, "WEBHOOK_SECRET must be at least 24 characters"),
   POC_ACCESS_TOKEN: z.string().min(12, "POC_ACCESS_TOKEN must be at least 12 characters"),
 
   MAX_CALL_SECONDS: z.coerce.number().int().min(60).max(3600).default(290),
+  // Applicant links expire after this many hours.
+  INVITE_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(72),
+  // Number of proxies in front of the app (Railway: 1). 0 locally. Used for the real client IP and HTTPS.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1),
+  // Recruiter login lasts this many hours.
+  RECRUITER_SESSION_HOURS: z.coerce.number().int().min(1).max(24 * 7).default(12),
 });
 
 export type Config = z.infer<typeof EnvSchema>;

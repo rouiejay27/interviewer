@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { safeEqual, sha256, type AppContext } from "../context.js";
+import { queueEvaluation } from "../evaluation/runner.js";
 
 const TavusEvent = z
   .object({
@@ -13,7 +14,7 @@ const TavusEvent = z
   .loose();
 
 const TranscriptEntry = z
-  .object({ role: z.string(), content: z.string() })
+  .object({ role: z.string(), content: z.string(), seconds_from_start: z.number().optional() })
   .loose();
 
 export function registerWebhookRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -38,38 +39,56 @@ export function registerWebhookRoutes(app: FastifyInstance, ctx: AppContext): vo
       return { ok: true, duplicate: true };
     }
 
-    const session = ev.conversation_id
-      ? (
-          await ctx.pool.query<{ id: string }>("SELECT id FROM sessions WHERE tavus_conversation_id = $1", [
-            ev.conversation_id,
-          ])
-        ).rows[0]
-      : undefined;
+    let sessionId: string | undefined;
+    try {
+      const session = ev.conversation_id
+        ? (
+            await ctx.pool.query<{ id: string; invite_id: string | null; rubric_version_id: string | null }>(
+              "SELECT id, invite_id, rubric_version_id FROM sessions WHERE tavus_conversation_id = $1",
+              [ev.conversation_id],
+            )
+          ).rows[0]
+        : undefined;
 
-    if (ev.event_type === "system.shutdown" && session) {
-      const reason = typeof ev.properties?.shutdown_reason === "string" ? ev.properties.shutdown_reason : "shutdown";
-      await ctx.pool.query(
-        `UPDATE sessions SET status = 'ended', end_reason = COALESCE(end_reason, $2), ended_at = COALESCE(ended_at, now())
-         WHERE id = $1`,
-        [session.id, reason],
-      );
-    }
+      sessionId = session?.id;
 
-    if (ev.event_type === "application.transcription_ready" && session) {
-      const entries = z.array(TranscriptEntry).safeParse(ev.properties?.transcript);
-      if (entries.success) {
-        // The provider's transcript includes its placeholder system prompt; keep only spoken turns.
-        const spoken = entries.data.filter((e) => e.role === "user" || e.role === "assistant");
+      if (ev.event_type === "system.shutdown" && session) {
+        const reason = typeof ev.properties?.shutdown_reason === "string" ? ev.properties.shutdown_reason : "shutdown";
         await ctx.pool.query(
-          "INSERT INTO transcripts (session_id, entries) VALUES ($1, $2) ON CONFLICT (session_id) DO NOTHING",
-          [session.id, JSON.stringify(spoken)],
+          `UPDATE sessions SET status = 'ended', end_reason = COALESCE(end_reason, $2), ended_at = COALESCE(ended_at, now())
+           WHERE id = $1`,
+          [session.id, reason],
         );
-      } else {
-        req.log.warn({ sessionId: session.id }, "transcription_ready had no usable transcript");
       }
+
+      if (ev.event_type === "application.transcription_ready" && session) {
+        const entries = z.array(TranscriptEntry).safeParse(ev.properties?.transcript);
+        if (entries.success) {
+          // The provider's transcript includes its placeholder system prompt; keep only spoken turns,
+          // and only the fields we need (no participant names).
+          const spoken = entries.data
+            .filter((e) => e.role === "user" || e.role === "assistant")
+            .map((e) => ({ role: e.role, content: e.content, seconds_from_start: e.seconds_from_start }));
+          const stored = await ctx.pool.query(
+            "INSERT INTO transcripts (session_id, entries) VALUES ($1, $2) ON CONFLICT (session_id) DO NOTHING",
+            [session.id, JSON.stringify(spoken)],
+          );
+          if (session.invite_id) {
+            await ctx.pool.query("UPDATE invites SET status = 'completed' WHERE id = $1 AND status IN ('started', 'interrupted')", [session.invite_id]);
+          }
+          if (stored.rowCount && session.rubric_version_id) await queueEvaluation(ctx, session.id, { log: req.log });
+        } else {
+          req.log.warn({ sessionId: session.id }, "transcription_ready had no usable transcript");
+        }
+      }
+
+    } catch (err) {
+      // Let the provider's retry be processed instead of being ignored as a duplicate.
+      await ctx.pool.query("DELETE FROM webhook_events WHERE dedupe_key = $1", [dedupeKey]).catch(() => undefined);
+      throw err;
     }
 
-    req.log.info({ eventType: ev.event_type, sessionId: session?.id }, "webhook processed");
+    req.log.info({ eventType: ev.event_type, sessionId }, "webhook processed");
     return { ok: true };
   });
 }

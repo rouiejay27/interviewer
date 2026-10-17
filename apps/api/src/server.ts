@@ -3,9 +3,12 @@ import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { loadConfig, mask } from "./config.js";
+import { redactUrl } from "./logging.js";
 import type { AppContext } from "./context.js";
 import { createPool, migrate } from "./db.js";
+import { registerApplicantRoutes } from "./routes/applicant.js";
 import { registerLlmRoutes } from "./routes/llm.js";
+import { registerRecruiterRoutes } from "./routes/recruiter.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { startSweeper } from "./sweeper.js";
@@ -20,15 +23,17 @@ const app = Fastify({
     // Never write secrets or applicant text to routine logs.
     redact: ["req.headers.authorization", "req.headers['x-api-key']", "req.headers['x-poc-token']"],
     serializers: {
-      // Drop query strings from logged URLs: the webhook URL carries a secret token.
+      // Logged URLs never carry secrets: drop query strings (webhook token) and mask applicant link tokens.
       req: (req: { method: string; url: string; ip?: string }) => ({
         method: req.method,
-        url: req.url.split("?")[0],
+        url: redactUrl(req.url),
         ip: req.ip,
       }),
     },
   },
   bodyLimit: 2 * 1024 * 1024,
+  // Railway terminates HTTPS at its proxy. Trust only that many hops, so a client cannot fake its IP.
+  trustProxy: (_address: string, hop: number) => hop < config.TRUST_PROXY_HOPS,
 });
 
 await app.register(fastifyStatic, {
@@ -53,6 +58,9 @@ app.get("/api/health", async () => {
 registerLlmRoutes(app, ctx);
 registerSessionRoutes(app, ctx);
 registerWebhookRoutes(app, ctx);
+registerRecruiterRoutes(app, ctx);
+registerApplicantRoutes(app, ctx);
+app.get("/recruiter", async (_req, reply) => reply.sendFile("recruiter.html"));
 
 // Migrations use the direct (unpooled) connection, as Neon recommends for schema changes.
 const migrationPool = createPool(config.DATABASE_URL_UNPOOLED ?? config.DATABASE_URL, 1);

@@ -1,8 +1,10 @@
 # iNTERVIEWER
 
-A real-time AI video interviewer. An applicant joins a browser link and speaks with a realistic talking avatar; the system keeps the transcript and (in later phases) produces an evidence-linked report for a human recruiter, who makes every hiring decision.
+A real-time AI video interviewer. An applicant joins a browser link and speaks with a realistic talking avatar; the system keeps the transcript and produces an evidence-linked report for a human recruiter, who makes every hiring decision.
 
-> **Status: Phase 1, live-call proof of concept.** Not production software. The avatar call, interview logic, transcript capture, and cleanup are implemented; they have been tested against mock providers only until the live checks below are run.
+> **Status: Phase 3 vertical slice (in testing).** Not production software.
+> - Phase 1 (live call): a real Tavus call with the avatar speaking has worked on Railway. The two-way checks below are still pending.
+> - Phase 3 (vacancy → rubric → link → interview → report): built and tested against **mock** Tavus and Grok servers and a local PostgreSQL only. Not yet tested with the real providers.
 
 ## How it works (Phase 1)
 
@@ -69,6 +71,40 @@ Tavus webhooks ───────────────►  /webhooks/tavus
 
 Tip: set `TAVUS_TEST_MODE=true` to check the plumbing without the avatar joining (Tavus does not charge for test-mode conversations).
 
+## Phase 3: recruiter workflow
+
+```
+Recruiter (/recruiter)                         Applicant (/i/<one-time link>)
+  log in                                         about + AI notice
+  create vacancy (job description)               microphone check (camera optional)
+  draft rubric with AI or by hand, edit          consent (AI interview, transcript; no recording)
+  approve rubric  ── frozen version ──┐          or: ask for an interview with a person
+  create one-time link (expires 72 h) │          live avatar interview (approved questions)
+                                      └───────►  transcript (Tavus webhook)
+  report: ratings with verified quotes ◄──────── evaluation (Grok, after the call)
+  human decision + notes (logged)
+```
+
+- **Rubric:** criteria with weights (1 to 5) and anchors for scores 1, 3, 5; questions linked to criteria. Approved versions cannot change, and every interview stores the version it used, so all applicants for a vacancy face the same core criteria.
+- **Evaluation:** Grok returns a rating, quotes, and a reason per criterion. The server keeps a quote only if it appears in the applicant's own words in the transcript. A rating left without a verified quote becomes **Not assessed**. The overall score is the weighted mean of assessed criteria only, shown with its evidence coverage, and hidden when coverage is under 50%.
+- **Human decision:** the report shows the full transcript next to the summary. The recruiter records advance, hold, decline, or undecided with notes; the history is kept.
+- **Access:** recruiters see only their own vacancies. Links are 256-bit random tokens stored as hashes, single use, expiring, and revocable. Link tokens, secrets, and applicant answers are kept out of server logs. Views and changes are written to an access log without applicant content.
+
+### Set up Phase 3 (after Phase 1 works)
+
+1. Deploy the new code (Railway redeploys on push). The new database tables are created automatically at start-up.
+2. Create your recruiter login (run on your computer; it uses the database in your `.env`):
+   ```powershell
+   npm run create-recruiter -- you@example.com "Your Name"
+   ```
+   A password is printed once. Save it in a password manager. Running the command again resets the password.
+3. Open `https://<your-domain>/recruiter`, log in, and create a vacancy.
+4. Press **Draft with AI** (or **Start from example**), read every line, edit, and **Approve rubric**.
+5. Create an applicant link and open it on another device (a phone works) to run the interview.
+6. After the call, the report appears under **Interviews** a minute or two later (it waits for the Tavus transcript).
+
+The free Tavus plan caps a call at 5 minutes, so keep rubrics to about 3 questions (the page suggests a number).
+
 ## Phase 1 acceptance checks (run on real calls, record results)
 
 | # | Check | How to see it |
@@ -89,8 +125,17 @@ Performance targets are **test goals, not guarantees**: avatar reply starts unde
 ```powershell
 npm run build       # TypeScript strict type check
 npm run db:check    # database connection, migrations, write/read/delete
-npm test            # interview-logic unit tests
+npm test            # unit tests (interview logic, rubric, evaluation checks, auth)
 ```
+
+End-to-end test with **mock** providers (needs a local, throwaway PostgreSQL; the database is wiped):
+
+```bash
+cd apps/api
+E2E_DATABASE_URL=postgres://user:pass@localhost:5432/interviewer_e2e node test-e2e/run.mjs
+```
+
+Passing mock tests do not prove the real Tavus or Grok integrations work.
 
 ## Project layout
 
@@ -98,14 +143,22 @@ npm test            # interview-logic unit tests
 apps/api/
   src/server.ts            Fastify server, logging with secrets and query strings removed
   src/routes/llm.ts        OpenAI-compatible custom LLM endpoint for Tavus (streaming, barge-in cancel, fallback line)
-  src/routes/sessions.ts   Start, end, and inspect a session
-  src/routes/webhooks.ts   Idempotent Tavus webhook handler (shutdown, transcript)
-  src/interview/           Script, state machine (derived from history), interviewer prompt
+  src/routes/sessions.ts   Phase 1 test page: start, end, and inspect a session
+  src/routes/recruiter.ts  Login, vacancies, rubrics, links, reports, decisions
+  src/routes/applicant.ts  One-time applicant link: notice, consent, start, end, human alternative
+  src/routes/webhooks.ts   Idempotent Tavus webhook handler (shutdown, transcript, starts evaluation)
+  src/interview/           Script, state machine (derived from history), interviewer prompt, session start/end
+  src/rubric/              Rubric schema and validation, AI rubric draft
+  src/evaluation/          Evaluation prompt, quote verification, scoring, report
+  src/auth.ts              Password hashing (scrypt), login cookie, attempt limiter, access log
   src/tavus.ts             Tavus API client (PAL, conversation, end)
   src/llm/grok.ts          xAI streaming client
-  src/sweeper.ts           Ends stale provider sessions every minute
+  src/sweeper.ts           Ends stale provider sessions, retries failed evaluations
   migrations/              PostgreSQL schema
   public/index.html        Phase 1 test page
+  public/recruiter.html    Recruiter console
+  public/apply.html        Applicant page
+  test-e2e/                End-to-end test with MOCK providers
 docker-compose.yml         Optional local PostgreSQL (port 5433) instead of Neon
 ```
 

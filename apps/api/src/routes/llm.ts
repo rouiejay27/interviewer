@@ -2,7 +2,8 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { safeEqual, sha256, type AppContext } from "../context.js";
 import { buildLlmMessages, buildSystemPrompt } from "../interview/prompt.js";
-import { POC_SCRIPT } from "../interview/script.js";
+import { POC_SCRIPT, type InterviewScript } from "../interview/script.js";
+import { Rubric, scriptFromRubric } from "../rubric/rubric.js";
 import { deriveState, type ChatMessage } from "../interview/state.js";
 import { extractDeltaText, streamChat } from "../llm/grok.js";
 
@@ -49,6 +50,19 @@ function sseChunk(id: string, model: string, content: string | null, finish: str
 }
 
 export function registerLlmRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // Approved rubrics are frozen, so a session's script can be cached for its lifetime.
+  const scripts = new Map<string, InterviewScript>();
+  function scriptFor(sessionId: string | undefined, rubric: unknown): InterviewScript {
+    if (!sessionId || !rubric) return POC_SCRIPT;
+    let script = scripts.get(sessionId);
+    if (!script) {
+      script = scriptFromRubric(Rubric.parse(rubric));
+      if (scripts.size > 200) scripts.clear();
+      scripts.set(sessionId, script);
+    }
+    return script;
+  }
+
   /**
    * OpenAI-compatible endpoint that Tavus calls as the PAL's custom LLM.
    * Tavus appends /chat/completions to the base URL we register: PUBLIC_BASE_URL/llm/v1
@@ -74,10 +88,12 @@ export function registerLlmRoutes(app: FastifyInstance, ctx: AppContext): void {
       .filter((m) => m.role === "system")
       .map((m) => SESSION_RE.exec(m.content)?.[1])
       .find(Boolean);
-    const sessionRow = await ctx.pool.query<{ id: string; created_at: Date; max_call_seconds: number }>(
+    const cols = "s.id, s.created_at, s.max_call_seconds, rv.content AS rubric";
+    const from = "FROM sessions s LEFT JOIN rubric_versions rv ON rv.id = s.rubric_version_id";
+    const sessionRow = await ctx.pool.query<{ id: string; created_at: Date; max_call_seconds: number; rubric: unknown }>(
       marker
-        ? "SELECT id, created_at, max_call_seconds FROM sessions WHERE id = $1"
-        : "SELECT id, created_at, max_call_seconds FROM sessions WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",
+        ? `SELECT ${cols} ${from} WHERE s.id = $1`
+        : `SELECT ${cols} ${from} WHERE s.status = 'active' ORDER BY s.created_at DESC LIMIT 1`,
       marker ? [marker] : [],
     );
     const session = sessionRow.rows[0];
@@ -87,8 +103,9 @@ export function registerLlmRoutes(app: FastifyInstance, ctx: AppContext): void {
     const timeUp = session
       ? Date.now() > session.created_at.getTime() + (session.max_call_seconds - 30) * 1000
       : false;
-    const state = deriveState(history, POC_SCRIPT, { timeUp });
-    const system = buildSystemPrompt(POC_SCRIPT, state);
+    const script = scriptFor(session?.id, session?.rubric);
+    const state = deriveState(history, script, { timeUp });
+    const system = buildSystemPrompt(script, state);
     const llmMessages = buildLlmMessages(system, history);
 
     const lastUser = [...history].reverse().find((m) => m.role === "user" && m.content.trim());

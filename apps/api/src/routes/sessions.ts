@@ -1,9 +1,7 @@
-import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { tavusAuth } from "../config.js";
 import { safeEqual, type AppContext } from "../context.js";
 import { POC_SCRIPT } from "../interview/script.js";
-import { createConversation, endConversation, TavusError } from "../tavus.js";
+import { endInterviewSession, startInterviewSession, StartError } from "../interview/start.js";
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
@@ -20,70 +18,27 @@ export function registerSessionRoutes(app: FastifyInstance, ctx: AppContext): vo
 
   app.post("/api/sessions", async (req, reply) => {
     if (!requireAccess(req, reply)) return;
-    if (!ctx.config.TAVUS_PAL_ID) {
-      return reply.code(500).send({ error: "TAVUS_PAL_ID is empty. Run `npm run create-pal` first." });
-    }
-
-    const active = await ctx.pool.query("SELECT 1 FROM sessions WHERE status = 'active'");
-    if (active.rowCount) {
-      return reply.code(409).send({ error: "A session is already active. End it first (free plan allows one call)." });
-    }
-
-    const sessionId = randomUUID();
-    const maxCallSeconds = ctx.config.MAX_CALL_SECONDS;
-    await ctx.pool.query("INSERT INTO sessions (id, max_call_seconds) VALUES ($1, $2)", [sessionId, maxCallSeconds]);
-
     try {
-      const conv = await createConversation(tavusAuth(ctx.config), {
-        palId: ctx.config.TAVUS_PAL_ID,
-        sessionId,
-        callbackUrl: `${ctx.config.PUBLIC_BASE_URL}/webhooks/tavus?token=${encodeURIComponent(ctx.config.WEBHOOK_SECRET)}`,
+      return await startInterviewSession(ctx, {
         greeting: POC_SCRIPT.greeting,
-        maxCallSeconds,
-        testMode: ctx.config.TAVUS_TEST_MODE,
+        conversationLabel: "PoC",
+        log: req.log,
       });
-      const status = ctx.config.TAVUS_TEST_MODE ? "ended" : "active";
-      await ctx.pool.query(
-        "UPDATE sessions SET tavus_conversation_id = $2, status = $3, end_reason = $4 WHERE id = $1",
-        [sessionId, conv.conversation_id, status, ctx.config.TAVUS_TEST_MODE ? "test_mode" : null],
-      );
-      const joinUrl = conv.meeting_token
-        ? `${conv.conversation_url}?t=${encodeURIComponent(conv.meeting_token)}`
-        : conv.conversation_url;
-      req.log.info({ sessionId, conversationId: conv.conversation_id, testMode: ctx.config.TAVUS_TEST_MODE }, "session created");
-      return { sessionId, joinUrl, maxCallSeconds, testMode: ctx.config.TAVUS_TEST_MODE };
     } catch (err) {
-      const detail = err instanceof TavusError ? `${err.message}: ${err.body}` : (err as Error).message;
-      req.log.error({ sessionId, detail }, "Tavus conversation creation failed");
-      await ctx.pool.query("UPDATE sessions SET status = 'failed', end_reason = $2, ended_at = now() WHERE id = $1", [
-        sessionId,
-        "create_failed",
-      ]);
-      return reply.code(502).send({ error: "Could not start the avatar call.", detail });
+      if (err instanceof StartError) return reply.code(err.httpStatus).send({ error: err.message, detail: err.detail });
+      throw err;
     }
   });
 
   app.post<{ Params: { id: string } }>("/api/sessions/:id/end", async (req, reply) => {
     if (!requireAccess(req, reply)) return;
     if (!UUID_RE.test(req.params.id)) return reply.code(400).send({ error: "Bad session id." });
-    const row = await ctx.pool.query<{ tavus_conversation_id: string | null; status: string }>(
-      "SELECT tavus_conversation_id, status FROM sessions WHERE id = $1",
-      [req.params.id],
-    );
-    const s = row.rows[0];
-    if (!s) return reply.code(404).send({ error: "Session not found." });
-    if (s.status === "active" && s.tavus_conversation_id) {
-      try {
-        await endConversation(tavusAuth(ctx.config), s.tavus_conversation_id);
-      } catch (err) {
-        req.log.warn({ err: (err as Error).message }, "End Conversation call failed; sweeper will retry");
-        return reply.code(502).send({ error: "Provider did not confirm the end. The cleanup job will retry." });
-      }
+    const exists = await ctx.pool.query("SELECT 1 FROM sessions WHERE id = $1", [req.params.id]);
+    if (!exists.rowCount) return reply.code(404).send({ error: "Session not found." });
+    if (!(await endInterviewSession(ctx, req.params.id, "ended_by_user"))) {
+      req.log.warn({ sessionId: req.params.id }, "End Conversation call failed; sweeper will retry");
+      return reply.code(502).send({ error: "Provider did not confirm the end. The cleanup job will retry." });
     }
-    await ctx.pool.query(
-      "UPDATE sessions SET status = 'ended', end_reason = COALESCE(end_reason, 'ended_by_user'), ended_at = COALESCE(ended_at, now()) WHERE id = $1",
-      [req.params.id],
-    );
     return { ok: true };
   });
 

@@ -11,7 +11,8 @@
     "db:check": "tsx --env-file-if-exists=../../.env src/scripts/db-check.ts",
     "secrets": "tsx src/scripts/gen-secrets.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "create-recruiter": "tsx --env-file-if-exists=../../.env src/scripts/create-recruiter.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.6",

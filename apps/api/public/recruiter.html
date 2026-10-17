@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>iNTERVIEWER Recruiter</title>
+  <style>
+    :root { --bg:#f6f7f9; --card:#fff; --ink:#15181d; --muted:#5d6673; --line:#dde1e7; --accent:#2457d6; --ok:#17733f; --warn:#a4400b; --soft:#eef2fb; --hl:#fff4c2; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --card:#171a20; --ink:#e8ebf0; --muted:#9aa3af; --line:#2a2f38; --accent:#6f95ff; --ok:#5fcf8f; --warn:#f0a06a; --soft:#1c2333; --hl:#4a4220; } }
+    * { box-sizing:border-box; }
+    body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+    header { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); }
+    header strong { font-size:16px; }
+    main { max-width:1100px; margin:0 auto; padding:20px 16px 56px; }
+    h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 10px; } h3 { font-size:15px; margin:0 0 6px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+    .muted { color:var(--muted); font-size:13px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    input, textarea, select { padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--ink); font:inherit; width:100%; }
+    textarea { min-height:120px; font-family:ui-monospace, SFMono-Regular, Consolas, monospace; font-size:13px; }
+    label { display:block; font-weight:600; font-size:13px; margin:10px 0 4px; }
+    button { padding:8px 13px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; font:inherit; cursor:pointer; white-space:nowrap; }
+    button.secondary { background:transparent; color:var(--accent); }
+    button.small { padding:4px 9px; font-size:13px; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    a { color:var(--accent); }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); font-weight:600; font-size:12px; }
+    .table-wrap { overflow-x:auto; }
+    .pill { display:inline-block; padding:1px 8px; border-radius:99px; border:1px solid var(--line); font-size:12px; }
+    .pill.ok { border-color:var(--ok); color:var(--ok); } .pill.warn { border-color:var(--warn); color:var(--warn); }
+    .err { color:var(--warn); } .ok { color:var(--ok); }
+    .banner { background:var(--soft); border-radius:8px; padding:10px 12px; font-size:14px; margin-bottom:12px; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    @media (max-width:860px) { .grid2 { grid-template-columns:1fr; } }
+    .crit { border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:10px; }
+    .crit .rating { font-size:18px; font-weight:700; }
+    blockquote { margin:6px 0; padding:4px 10px; border-left:3px solid var(--accent); }
+    .transcript { max-height:520px; overflow:auto; }
+    .entry { padding:6px 8px; border-radius:6px; margin-bottom:4px; }
+    .entry.user { background:var(--soft); }
+    .entry.flash { background:var(--hl); }
+    .linkbox { word-break:break-all; background:var(--soft); padding:8px; border-radius:6px; font-family:ui-monospace, monospace; font-size:13px; }
+    details summary { cursor:pointer; color:var(--accent); font-size:13px; }
+    [hidden] { display:none !important; }
+  </style>
+</head>
+<body>
+<header>
+  <strong>iNTERVIEWER · Recruiter</strong>
+  <span class="row"><span id="who" class="muted"></span><button class="secondary small" id="logout" hidden>Log out</button></span>
+</header>
+<main id="view"><p class="muted">Loading...</p></main>
+
+<script>
+  // ---------- tiny helpers (all text goes through textContent; no HTML injection) ----------
+  const view = document.getElementById("view");
+  function h(tag, props = {}, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else if (k === "class") el.className = v;
+      else if (k in el && k !== "list") el[k] = v;
+      else el.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+    return el;
+  }
+  const fmtDate = (d) => (d ? new Date(d).toLocaleString() : "");
+  const fmtTime = (s) => (s == null ? "" : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`);
+
+  async function api(method, url, body) {
+    const res = await fetch(url, {
+      method,
+      headers: body !== undefined ? { "content-type": "application/json" } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      credentials: "same-origin",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && !url.endsWith("/login")) { location.hash = "#login"; throw new Error(data.error || "Please log in."); }
+    if (!res.ok) { const e = new Error(data.error || `Error ${res.status}`); e.details = data.details; e.status = res.status; throw e; }
+    return data;
+  }
+
+  function errorBox(e) {
+    return h("div", { class: "err" }, e.message, e.details?.length ? h("ul", {}, e.details.map((d) => h("li", {}, d))) : null);
+  }
+
+  const STATUS_PILL = {
+    pending: "", started: "", completed: "ok", revoked: "warn", human_requested: "warn", interrupted: "warn", expired: "warn",
+    active: "", ended: "ok", failed: "warn", creating: "", done: "ok", running: "", approved: "ok", draft: "",
+  };
+  const pill = (text) => h("span", { class: `pill ${STATUS_PILL[text] || ""}` }, String(text).replace("_", " "));
+
+  // ---------- routing ----------
+  let pollTimer = null;
+  async function route() {
+    clearTimeout(pollTimer);
+    const [page, id] = location.hash.replace(/^#/, "").split("/");
+    try {
+      if (page === "login") return renderLogin();
+      const me = await api("GET", "/api/auth/me");
+      document.getElementById("who").textContent = me.recruiter.display_name;
+      document.getElementById("logout").hidden = false;
+      if (page === "vacancy" && id) return await renderVacancy(id);
+      if (page === "report" && id) return await renderReport(id);
+      return await renderVacancies();
+    } catch (e) {
+      if (location.hash !== "#login") view.replaceChildren(h("div", { class: "card" }, errorBox(e)));
+    }
+  }
+  window.addEventListener("hashchange", route);
+  document.getElementById("logout").onclick = async () => { await api("POST", "/api/auth/logout"); location.hash = "#login"; };
+
+  // ---------- login ----------
+  function renderLogin() {
+    document.getElementById("logout").hidden = true;
+    document.getElementById("who").textContent = "";
+    const email = h("input", { type: "email", autocomplete: "username", required: true });
+    const pw = h("input", { type: "password", autocomplete: "current-password", required: true });
+    const msg = h("div");
+    const form = h("form", { class: "card", style: "max-width:420px;margin:40px auto",
+      onsubmit: async (ev) => {
+        ev.preventDefault(); msg.replaceChildren();
+        try { await api("POST", "/api/auth/login", { email: email.value, password: pw.value }); location.hash = "#vacancies"; }
+        catch (e) { msg.replaceChildren(errorBox(e)); }
+      } },
+      h("h1", {}, "Recruiter log in"),
+      h("label", {}, "Email"), email, h("label", {}, "Password"), pw,
+      h("div", { class: "row", style: "margin-top:14px" }, h("button", { type: "submit" }, "Log in")), msg,
+      h("p", { class: "muted" }, "Accounts are created by the server owner with npm run create-recruiter."));
+    view.replaceChildren(form);
+  }
+
+  // ---------- vacancies ----------
+  async function renderVacancies() {
+    const data = await api("GET", "/api/vacancies");
+    const title = h("input", { placeholder: "Job title, for example Junior IT Support Specialist" });
+    const desc = h("textarea", { placeholder: "Job description: main duties and must-have skills." });
+    const obj = h("textarea", { placeholder: "Optional: what this interview should find out (for example: hands-on troubleshooting, handling upset users).", style: "min-height:70px" });
+    const msg = h("div");
+    view.replaceChildren(
+      h("h1", {}, "Vacancies"),
+      h("p", { class: "muted" }, "Create a vacancy, approve its rubric, then send applicants a one-time interview link."),
+      h("div", { class: "card" },
+        data.vacancies.length
+          ? h("div", { class: "table-wrap" }, h("table", {},
+              h("tr", {}, h("th", {}, "Title"), h("th", {}, "Approved rubric"), h("th", {}, "Links sent"), h("th", {}, "Created")),
+              data.vacancies.map((v) => h("tr", {},
+                h("td", {}, h("a", { href: `#vacancy/${v.id}` }, v.title)),
+                h("td", {}, v.approved_version ? `Version ${v.approved_version}` : h("span", { class: "muted" }, "Not yet")),
+                h("td", {}, v.invites), h("td", { class: "muted" }, fmtDate(v.created_at))))))
+          : h("p", { class: "muted" }, "No vacancies yet.")),
+      h("form", { class: "card", onsubmit: async (ev) => {
+          ev.preventDefault(); msg.replaceChildren();
+          try { const r = await api("POST", "/api/vacancies", { title: title.value, description: desc.value, objectives: obj.value }); location.hash = `#vacancy/${r.id}`; }
+          catch (e) { msg.replaceChildren(errorBox(e)); }
+        } },
+        h("h2", {}, "New vacancy"),
+        h("label", {}, "Title"), title, h("label", {}, "Job description"), desc, h("label", {}, "Interview objectives"), obj,
+        h("div", { class: "row", style: "margin-top:12px" }, h("button", { type: "submit" }, "Create vacancy")), msg));
+  }
+
+  // ---------- one vacancy ----------
+  function rubricPreview(r) {
+    if (!r || typeof r !== "object" || !Array.isArray(r.criteria)) return h("p", { class: "muted" }, "Preview appears when the rubric is valid JSON.");
+    return h("div", {},
+      h("p", {}, h("strong", {}, r.roleTitle || "")),
+      h("h3", {}, "Criteria"),
+      (r.criteria || []).map((c) => h("div", { class: "crit" },
+        h("div", {}, h("strong", {}, c.name), " ", h("span", { class: "muted" }, `weight ${c.weight} · id ${c.id}`)),
+        h("div", { class: "muted" }, c.description),
+        h("div", { style: "font-size:13px;margin-top:4px" }, ["1", "3", "5"].map((k) => h("div", {}, h("strong", {}, `${k}: `), c.anchors?.[k] || ""))))),
+      h("h3", {}, "Questions"),
+      h("ol", {}, (r.questions || []).map((q) => h("li", {}, q.text, h("div", { class: "muted" }, `covers: ${(q.criterionIds || []).join(", ")} · follow-up: ${q.probeHint}`)))));
+  }
+
+  async function renderVacancy(id) {
+    const d = await api("GET", `/api/vacancies/${id}`);
+    const v = d.vacancy;
+    const approved = d.rubrics.find((r) => r.status === "approved");
+    const draft = d.rubrics.find((r) => r.status === "draft" && (!approved || r.version > approved.version));
+
+    // Rubric section
+    const rubricMsg = h("div");
+    const rubricCard = h("section", { class: "card" }, h("h2", {}, "Rubric"));
+    rubricCard.append(h("p", { class: "muted" },
+      "Every applicant for this vacancy is assessed on the same approved criteria. Approved versions are frozen; to change one, start a new version."));
+    if (draft) {
+      const ta = h("textarea", { value: JSON.stringify(draft.content, null, 2), style: "min-height:360px" });
+      const preview = h("div", {}, rubricPreview(draft.content));
+      ta.addEventListener("input", () => { try { preview.replaceChildren(rubricPreview(JSON.parse(ta.value))); } catch { preview.replaceChildren(h("p", { class: "err" }, "Not valid JSON yet.")); } });
+      const save = async () => {
+        rubricMsg.replaceChildren();
+        let content; try { content = JSON.parse(ta.value); } catch { rubricMsg.replaceChildren(h("p", { class: "err" }, "The rubric is not valid JSON.")); return false; }
+        const r = await api("PUT", `/api/rubrics/${draft.id}`, { content });
+        rubricMsg.replaceChildren(r.errors.length ? errorBox({ message: "Saved. Fix these before approving:", details: r.errors }) : h("p", { class: "ok" }, "Saved. Ready to approve."));
+        return r.errors.length === 0;
+      };
+      rubricCard.append(
+        h("p", {}, pill("draft"), ` Version ${draft.version} (${draft.source === "ai_draft" ? "AI draft: review every line" : "written by hand"})`),
+        h("div", { class: "grid2" }, h("div", {}, h("label", {}, "Edit (JSON)"), ta), h("div", {}, h("label", {}, "Preview"), preview)),
+        h("div", { class: "row", style: "margin-top:10px" },
+          h("button", { class: "secondary", onclick: () => save().catch((e) => rubricMsg.replaceChildren(errorBox(e))) }, "Save draft"),
+          h("button", { onclick: async () => {
+            try { if (!(await save())) return;
+              if (!confirm("Approve this rubric? It becomes frozen and is used for every new applicant link.")) return;
+              await api("POST", `/api/rubrics/${draft.id}/approve`); route(); }
+            catch (e) { rubricMsg.replaceChildren(errorBox(e)); } } }, "Approve rubric")),
+        rubricMsg);
+    } else {
+      if (approved) rubricCard.append(h("p", {}, pill("approved"), ` Version ${approved.version}, approved ${fmtDate(approved.approved_at)}`), rubricPreview(approved.content));
+      else rubricCard.append(h("p", { class: "muted" }, "No rubric yet."));
+      const busy = h("span", { class: "muted" });
+      rubricCard.append(h("div", { class: "row", style: "margin-top:10px" },
+        h("button", { onclick: async (ev) => {
+          ev.target.disabled = true; busy.textContent = "Drafting with AI, this can take up to a minute...";
+          try { await api("POST", `/api/vacancies/${id}/rubrics/ai-draft`); route(); }
+          catch (e) { busy.textContent = ""; rubricMsg.replaceChildren(errorBox(e)); ev.target.disabled = false; } } },
+          approved ? "New version: draft with AI" : "Draft with AI"),
+        h("button", { class: "secondary", onclick: async () => {
+          try { await api("POST", `/api/vacancies/${id}/rubrics`, { content: approved ? approved.content : { ...d.exampleRubric, roleTitle: v.title } }); route(); }
+          catch (e) { rubricMsg.replaceChildren(errorBox(e)); } } },
+          approved ? "New version: copy current" : "Start from example"),
+        busy), rubricMsg);
+      rubricCard.append(h("p", { class: "muted" }, `This call allows about ${d.suggestedQuestions} questions (limit ${Math.round(d.maxCallSeconds / 60)} minutes).`));
+    }
+
+    // Invites
+    const label = h("input", { placeholder: "Applicant reference, for example APP-2026-014", maxLength: 80 });
+    const inviteMsg = h("div");
+    const inviteCard = h("section", { class: "card" },
+      h("h2", {}, "Applicant links"),
+      h("p", { class: "muted" }, "Each link works once and expires. Use a reference instead of the applicant's full name if you prefer. The link is shown only once; copy it before leaving the page."),
+      approved
+        ? h("form", { class: "row", onsubmit: async (ev) => {
+            ev.preventDefault(); inviteMsg.replaceChildren();
+            try {
+              const r = await api("POST", `/api/vacancies/${id}/invites`, { candidateLabel: label.value });
+              const box = h("div", { class: "linkbox" }, r.link);
+              inviteMsg.replaceChildren(h("p", { class: "ok" }, `Link created. It expires in ${r.expiresInHours} hours.`), box,
+                h("div", { class: "row", style: "margin-top:6px" }, h("button", { class: "small", type: "button", onclick: () => navigator.clipboard.writeText(r.link) }, "Copy link")));
+              label.value = "";
+              refreshInvites();
+            } catch (e) { inviteMsg.replaceChildren(errorBox(e)); }
+          } }, h("div", { style: "flex:1;min-width:220px" }, label), h("button", { type: "submit" }, "Create link"))
+        : h("p", { class: "muted" }, "Approve a rubric first."),
+      inviteMsg, h("div", { id: "invites" }));
+    function inviteTable(list) {
+      if (!list.length) return h("p", { class: "muted" }, "No links yet.");
+      return h("div", { class: "table-wrap" }, h("table", {},
+        h("tr", {}, h("th", {}, "Applicant"), h("th", {}, "Status"), h("th", {}, "Rubric"), h("th", {}, "Expires"), h("th", {}, "")),
+        list.map((i) => h("tr", {},
+          h("td", {}, i.candidate_label),
+          h("td", {}, pill(i.expired ? "expired" : i.status),
+            i.status === "human_requested" ? h("div", { class: "muted" }, "Asked for a person. Contact them.") : null,
+            i.status === "interrupted" ? h("div", { class: "muted" }, "Call ended without a transcript. Not the applicant's fault; send a new link.") : null),
+          h("td", {}, `v${i.rubric_version}`), h("td", { class: "muted" }, fmtDate(i.expires_at)),
+          h("td", { class: "row" },
+            ["pending", "human_requested"].includes(i.status) && !i.expired
+              ? h("button", { class: "secondary small", onclick: async () => { if (confirm("Revoke this link?")) { await api("POST", `/api/invites/${i.id}/revoke`); refreshInvites(); } } }, "Revoke")
+              : null,
+            i.expired || ["started", "completed", "interrupted", "human_requested"].includes(i.status)
+              ? h("button", { class: "secondary small", onclick: async () => {
+                  if (!confirm("Create a new one-time link for this applicant?")) return;
+                  try {
+                    const r = await api("POST", `/api/invites/${i.id}/reissue`);
+                    inviteMsg.replaceChildren(h("p", { class: "ok" }, `New link for ${i.candidate_label}. It expires in ${r.expiresInHours} hours.`), h("div", { class: "linkbox" }, r.link),
+                      h("div", { class: "row", style: "margin-top:6px" }, h("button", { class: "small", type: "button", onclick: () => navigator.clipboard.writeText(r.link) }, "Copy link")));
+                    refreshInvites();
+                  } catch (e) { inviteMsg.replaceChildren(errorBox(e)); } } }, "New link")
+              : null)))));
+    }
+    async function refreshInvites() {
+      const fresh = await api("GET", `/api/vacancies/${id}`);
+      document.getElementById("invites")?.replaceChildren(inviteTable(fresh.invites));
+    }
+
+    const interviewsCard = h("section", { class: "card" }, h("h2", {}, "Interviews"),
+      d.interviews.length
+        ? h("div", { class: "table-wrap" }, h("table", {},
+            h("tr", {}, h("th", {}, "Applicant"), h("th", {}, "Call"), h("th", {}, "Report"), h("th", {}, "Decision"), h("th", {}, "Date")),
+            d.interviews.map((s) => h("tr", {},
+              h("td", {}, h("a", { href: `#report/${s.id}` }, s.candidate_label)),
+              h("td", {}, pill(s.status), s.end_reason ? h("div", { class: "muted" }, s.end_reason) : null),
+              h("td", {}, s.evaluation_status ? pill(s.evaluation_status) : h("span", { class: "muted" }, s.has_transcript ? "queued" : "waiting for transcript")),
+              h("td", {}, s.decision ? pill(s.decision) : h("span", { class: "muted" }, "none")),
+              h("td", { class: "muted" }, fmtDate(s.created_at))))))
+        : h("p", { class: "muted" }, "No interviews yet."));
+
+    view.replaceChildren(
+      h("p", {}, h("a", { href: "#vacancies" }, "← Vacancies")),
+      h("h1", {}, v.title),
+      h("details", { class: "card" }, h("summary", {}, "Job description and objectives"),
+        h("p", { style: "white-space:pre-wrap" }, v.description), v.objectives ? h("p", { style: "white-space:pre-wrap" }, h("strong", {}, "Objectives: "), v.objectives) : null),
+      rubricCard, inviteCard, interviewsCard);
+    document.getElementById("invites").replaceChildren(inviteTable(d.invites));
+  }
+
+  // ---------- report ----------
+  async function renderReport(id) {
+    const r = await api("GET", `/api/interviews/${id}/report`);
+    const entries = r.transcript?.entries || [];
+    const ev = r.evaluation;
+    const result = ev?.status === "done" ? ev.result : null;
+
+    const transcriptBox = h("div", { class: "transcript" },
+      entries.length
+        ? entries.map((e, i) => h("div", { class: `entry ${e.role}`, id: `entry-${i}` },
+            h("span", { class: "muted" }, `[${i}] ${fmtTime(e.seconds_from_start)} `),
+            h("strong", {}, e.role === "user" ? "Applicant: " : "Interviewer: "), e.content))
+        : h("p", { class: "muted" }, r.interview.status === "active" ? "The interview is in progress." : "The transcript has not arrived yet. It usually comes a minute or two after the call."));
+
+    function jump(i) {
+      const el = document.getElementById(`entry-${i}`);
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1600);
+    }
+
+    const evalBox = h("section", { class: "card" }, h("h2", {}, "Evidence summary (AI draft)"),
+      h("div", { class: "banner" }, "Drafted by AI from the transcript, then checked: every quote below was matched against the applicant's own words, and ratings without a matching quote are marked Not assessed. Experience the applicant describes is self-reported, not verified. You make the decision."));
+    if (r.integrity.length) evalBox.append(h("div", { class: "banner" }, h("strong", {}, "How the interview ran"), h("ul", {}, r.integrity.map((n) => h("li", {}, n)))));
+
+    if (!ev) evalBox.append(h("p", { class: "muted" }, r.transcript ? "Queued." : "Starts when the transcript arrives."));
+    else if (ev.status === "pending" || ev.status === "running") evalBox.append(h("p", { class: "muted" }, "Preparing the summary..."));
+    else if (ev.status === "failed") evalBox.append(h("p", { class: "err" }, `The summary could not be prepared (${ev.error || "unknown error"}). It retries automatically, or use Re-run below.`));
+
+    if (result) {
+      evalBox.append(h("div", { class: "row", style: "gap:24px;margin:6px 0 12px" },
+        h("div", {}, h("div", { class: "muted" }, "Overall (assessed criteria only)"),
+          h("div", { class: "rating" , style: "font-size:24px;font-weight:700" }, result.score == null ? "Not enough evidence" : `${result.score.toFixed(1)} / 5`)),
+        h("div", {}, h("div", { class: "muted" }, "Evidence coverage"), h("div", { style: "font-size:24px;font-weight:700" }, `${Math.round(result.coverage * 100)}%`))),
+        h("details", {}, h("summary", {}, "How this is calculated"), h("p", { class: "muted" }, result.formula)));
+      for (const c of result.criteria) {
+        const rubricC = r.rubric.content.criteria.find((x) => x.id === c.criterionId);
+        evalBox.append(h("div", { class: "crit" },
+          h("div", { class: "row", style: "justify-content:space-between" },
+            h("div", {}, h("strong", {}, c.name), " ", h("span", { class: "muted" }, `weight ${c.weight}`)),
+            h("div", { class: "rating" }, c.rating == null ? h("span", { class: "muted" }, "Not assessed") : `${c.rating} / 5`)),
+          c.rating != null && rubricC ? h("div", { class: "muted" }, "Anchor: ", rubricC.anchors[String(c.rating)] || `between the ${c.rating - 1} and ${c.rating + 1} descriptions`) : null,
+          c.evidence.map((e) => h("blockquote", {}, `"${e.quote}" `,
+            h("a", { href: "#", onclick: (x) => { x.preventDefault(); jump(e.entry); } }, `[${e.entry}${e.secondsFromStart != null ? " · " + fmtTime(e.secondsFromStart) : ""}]`),
+            entries[e.entry] ? h("details", {}, h("summary", {}, "Full answer"), h("div", { class: "muted" }, entries[e.entry].content)) : null)),
+          c.rationale ? h("p", { style: "margin:6px 0 0" }, h("span", { class: "muted" }, "AI comment (not verified): "), c.rationale) : null,
+          c.notes.map((n) => h("div", { class: "muted" }, n))));
+      }
+      if (result.unresolved.length) evalBox.append(h("h3", {}, "Not covered by this interview"), h("p", { class: "muted" }, "AI comment (not verified):"), h("ul", {}, result.unresolved.map((u) => h("li", {}, u))));
+      evalBox.append(h("p", { class: "muted" }, `Model: ${ev.model} · ${fmtDate(ev.updated_at)}`));
+    }
+    if (r.transcript && ev?.status !== "running") {
+      evalBox.append(h("div", { class: "row" }, h("button", { class: "secondary small", onclick: async () => {
+        if (!confirm("Run the evaluation again? The current summary is replaced.")) return;
+        await api("POST", `/api/interviews/${id}/evaluate`); route(); } }, "Re-run evaluation")));
+    }
+
+    // Human decision
+    const decision = h("select", {}, ["undecided", "advance", "hold", "decline"].map((x) => h("option", { value: x }, x)));
+    const notes = h("textarea", { placeholder: "Your reasons, based on the evidence. Required for decline.", style: "min-height:80px;font-family:inherit" });
+    const dmsg = h("div");
+    const decisionCard = h("section", { class: "card" }, h("h2", {}, "Your decision"),
+      h("p", { class: "muted" }, "The decision is yours. Review the transcript, not only the summary."),
+      h("form", { onsubmit: async (x) => {
+          x.preventDefault(); dmsg.replaceChildren();
+          if (decision.value === "decline" && !notes.value.trim()) { dmsg.replaceChildren(h("p", { class: "err" }, "Add your reasons before declining.")); return; }
+          try { await api("POST", `/api/interviews/${id}/decisions`, { decision: decision.value, notes: notes.value }); route(); }
+          catch (e) { dmsg.replaceChildren(errorBox(e)); } } },
+        h("label", {}, "Decision"), decision, h("label", {}, "Notes"), notes,
+        h("div", { class: "row", style: "margin-top:10px" }, h("button", { type: "submit" }, "Record decision")), dmsg),
+      r.decisions.length ? h("div", { style: "margin-top:12px" }, h("h3", {}, "History"),
+        r.decisions.map((d) => h("div", { class: "muted" }, `${fmtDate(d.created_at)} · ${d.recruiter}: `, h("strong", {}, d.decision), d.notes ? ` · ${d.notes}` : ""))) : null);
+
+    view.replaceChildren(...[
+      h("p", {}, h("a", { href: `#vacancy/${r.vacancy.id}` }, `← ${r.vacancy.title}`)),
+      h("h1", {}, `Interview: ${r.interview.candidateLabel}`),
+      h("p", { class: "muted" },
+        pill(r.interview.status), ` ${fmtDate(r.interview.startedAt)}`, r.interview.endReason ? ` · ended: ${r.interview.endReason}` : "",
+        ` · rubric v${r.rubric.version}`,
+        r.consent ? ` · consent recorded ${fmtDate(r.consent.accepted_at)} (notice ${r.consent.notice_version}; video recording: no)` : ""),
+      r.interview.status === "active" ? h("div", { class: "row", style: "margin-bottom:12px" }, h("button", { class: "secondary small", onclick: async () => {
+        if (confirm("End this live interview now?")) { await api("POST", `/api/interviews/${id}/end`); route(); } } }, "End live call")) : null,
+      h("div", { class: "grid2" }, h("div", {}, evalBox, decisionCard), h("section", { class: "card" }, h("h2", {}, "Transcript"), transcriptBox)),
+    ].filter(Boolean));
+
+    // Keep polling while something is still on its way.
+    // Re-render only when something changes, so typed notes are not wiped.
+    const stamp = (x) => JSON.stringify([x.status, !!x.has_transcript, x.evaluation_status || null, x.evaluation_updated_at ? new Date(x.evaluation_updated_at).getTime() : null]);
+    const before = stamp({ status: r.interview.status, has_transcript: !!r.transcript, evaluation_status: ev?.status, evaluation_updated_at: ev?.updated_at });
+    const poll = async () => {
+      if (location.hash !== `#report/${id}`) return;
+      try {
+        const fresh = await api("GET", `/api/interviews/${id}/status`);
+        if (stamp(fresh) !== before) return route();
+      } catch {}
+      pollTimer = setTimeout(poll, 8000);
+    };
+    if (r.interview.status === "active" || !r.transcript || !ev || ev.status === "pending" || ev.status === "running") {
+      pollTimer = setTimeout(poll, 8000);
+    }
+  }
+
+  route();
+</script>
+</body>
+</html>
